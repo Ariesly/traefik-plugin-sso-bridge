@@ -1,0 +1,16 @@
+displayName: SSO Bridge Plugin
+type: middleware
+
+import: github.com/Ariesly/traefik-plugin-sso-bridge
+
+summary: 'Legacy SSO authentication middleware for Traefik with CST token support'
+
+testData:
+  secretKey: "TestKey8"
+  cookieName: "SSO_AUTH_TICKET"
+  cstTokenName: "cst"
+  ssoLoginUrl: "http://sso.example.com/Login.aspx"
+  ticketServiceUrl: "http://sso.example.com/Ticket.asmx"
+  serviceId: "test_service"
+  cookieDomain: ".example.com"
+  cookieSecure: false

@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # Traefik with SSO Bridge Plugin
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    
+    command:
+      # API & Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      
+      # Providers
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      
+      # Entry Points
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      
+      # ===== Plugin Configuration =====
+      - "--experimental.plugins.sso-bridge.moduleName=github.com/Ariesly/traefik-plugin-sso-bridge"
+      - "--experimental.plugins.sso-bridge.version=v1.0.0"
+    
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Dashboard
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./examples/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-certs:/certs
+    
+    networks:
+      - web
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+  # Example Application 1: Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    
+    environment:
+      # Enable auth proxy
+      - GF_AUTH_PROXY_ENABLED=true
+      - GF_AUTH_PROXY_HEADER_NAME=X-Auth-User
+      - GF_AUTH_PROXY_HEADER_PROPERTY=username
+      - GF_AUTH_PROXY_AUTO_SIGN_UP=true
+      - GF_USERS_ALLOW_SIGN_UP=false
+    
+    volumes:
+      - grafana-data:/var/lib/grafana
+    
+    networks:
+      - web
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.localhost`)"
+      - "traefik.http.routers.grafana.entrypoints=web"
+      - "traefik.http.routers.grafana.middlewares=sso-bridge-dev@file"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  # Example Application 2: Whoami (Testing)
+  whoami:
+    image: traefik/whoami
+    container_name: whoami
+    restart: unless-stopped
+    
+    networks:
+      - web
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=web"
+      - "traefik.http.routers.whoami.middlewares=sso-bridge-dev@file"
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  grafana-data:
+    driver: local
+  traefik-certs:
+    driver: local

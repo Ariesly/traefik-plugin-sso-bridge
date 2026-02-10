@@ -1,0 +1,29 @@
+# Traefik Static Configuration Example
+# Save as: traefik.yml
+
+api:
+  dashboard: true
+  insecure: true  # Only for development
+
+log:
+  level: INFO
+
+providers:
+  docker:
+    exposedByDefault: false
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+# Plugin Configuration
+experimental:
+  plugins:
+    sso-bridge:
+      moduleName: "github.com/Ariesly/traefik-plugin-sso-bridge"
+      version: "v1.0.0"
