@@ -6,6 +6,8 @@
 
 A Traefik middleware plugin that bridges legacy SSO systems to modern applications using DES encryption and SOAP validation.
 
+**Code Quality**: Cyclomatic complexity < 10 for all functions ✅
+
 ## Features
 
 - ✅ **DES-CBC Decryption** - Decrypt legacy SSO cookies

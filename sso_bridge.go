@@ -73,97 +73,132 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 // ServeHTTP implements the http.Handler interface
 func (s *SSOBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	// Strategy A: Validate existing cookie (ValidateAT)
-	cookie, err := req.Cookie(s.config.CookieName)
-	if err == nil && cookie.Value != "" {
-		userData, err := s.decryptToken(cookie.Value)
-		if err == nil && userData["UserName"] != "" {
-			// Authentication successful via cookie
-			s.setAuthHeaders(req, userData)
-			s.next.ServeHTTP(rw, req)
-			return
-		}
+	// Strategy A: Validate existing cookie
+	if s.handleCookieAuth(rw, req) {
+		return
 	}
 
-	// Strategy B: Validate CST token from URL parameter
-	cstToken := req.URL.Query().Get(s.config.CstTokenName)
-	if cstToken != "" {
-		// Step 1: Decrypt CST token from URL
-		cstData, err := s.decryptToken(cstToken)
-		if err != nil {
-			s.redirectToLogin(rw, req)
-			return
-		}
-
-		// Step 2: Extract ServiceTicket from decrypted CST data
-		serviceTicket := cstData["ServiceTicket"]
-		if serviceTicket == "" {
-			s.redirectToLogin(rw, req)
-			return
-		}
-
-		// Step 3: Validate ServiceTicket via SOAP
-		userData, err := s.validateTicketViaSOAP(serviceTicket)
-
-		// Fallback: If SOAP doesn't return user info, use CST data
-		if err == nil && userData["UserName"] == "" {
-			userData = cstData
-		}
-
-		if err == nil && userData["UserName"] != "" {
-			// Authentication successful
-			encryptedToken, err := s.encryptToken(userData)
-			if err != nil {
-				s.redirectToLogin(rw, req)
-				return
-			}
-
-			// Build clean URL without CST token parameter
-			scheme := "http"
-			if req.TLS != nil || req.Header.Get("X-Forwarded-Proto") == "https" {
-				scheme = "https"
-			}
-
-			host := req.Host
-			if host == "" {
-				host = req.URL.Host
-			}
-
-			// Remove CST token parameter
-			q := req.URL.Query()
-			q.Del(s.config.CstTokenName)
-
-			// Build redirect URL
-			var cleanURL string
-			if len(q) > 0 {
-				cleanURL = fmt.Sprintf("%s://%s%s?%s", scheme, host, req.URL.Path, q.Encode())
-			} else {
-				cleanURL = fmt.Sprintf("%s://%s%s", scheme, host, req.URL.Path)
-			}
-
-			// Set cookie and redirect
-			cookie := &http.Cookie{
-				Name:     s.config.CookieName,
-				Value:    encryptedToken,
-				Path:     "/",
-				HttpOnly: true,
-				Secure:   s.config.CookieSecure,
-				SameSite: http.SameSiteLaxMode,
-			}
-
-			if s.config.CookieDomain != "" {
-				cookie.Domain = s.config.CookieDomain
-			}
-
-			rw.Header().Add("Set-Cookie", cookie.String())
-			rw.Header().Set("Location", cleanURL)
-			rw.WriteHeader(http.StatusFound)
-			return
-		}
+	// Strategy B: Validate CST token
+	if s.handleCstTokenAuth(rw, req) {
+		return
 	}
 
 	// Strategy C: Redirect to SSO login
 	s.redirectToLogin(rw, req)
+}
+
+// handleCookieAuth validates existing cookie authentication
+func (s *SSOBridge) handleCookieAuth(rw http.ResponseWriter, req *http.Request) bool {
+	cookie, err := req.Cookie(s.config.CookieName)
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+
+	userData, err := s.decryptToken(cookie.Value)
+	if err != nil || userData["UserName"] == "" {
+		return false
+	}
+
+	// Authentication successful via cookie
+	s.setAuthHeaders(req, userData)
+	s.next.ServeHTTP(rw, req)
+	return true
+}
+
+// handleCstTokenAuth validates CST token from URL parameter
+func (s *SSOBridge) handleCstTokenAuth(rw http.ResponseWriter, req *http.Request) bool {
+	cstToken := req.URL.Query().Get(s.config.CstTokenName)
+	if cstToken == "" {
+		return false
+	}
+
+	// Step 1: Decrypt CST token
+	cstData, err := s.decryptToken(cstToken)
+	if err != nil {
+		return false
+	}
+
+	// Step 2: Extract ServiceTicket
+	serviceTicket := cstData["ServiceTicket"]
+	if serviceTicket == "" {
+		return false
+	}
+
+	// Step 3: Validate ServiceTicket via SOAP
+	userData, err := s.validateTicketViaSOAP(serviceTicket)
+	if err != nil {
+		return false
+	}
+
+	// Fallback: Use CST data if SOAP doesn't return user info
+	if userData["UserName"] == "" {
+		userData = cstData
+	}
+
+	if userData["UserName"] == "" {
+		return false
+	}
+
+	// Authentication successful - set cookie and redirect
+	s.setCookieAndRedirect(rw, req, userData)
+	return true
+}
+
+// setCookieAndRedirect sets authentication cookie and redirects to clean URL
+func (s *SSOBridge) setCookieAndRedirect(rw http.ResponseWriter, req *http.Request, userData map[string]string) {
+	encryptedToken, err := s.encryptToken(userData)
+	if err != nil {
+		s.redirectToLogin(rw, req)
+		return
+	}
+
+	cleanURL := s.buildCleanURL(req)
+	cookie := s.buildCookie(encryptedToken)
+
+	rw.Header().Add("Set-Cookie", cookie.String())
+	rw.Header().Set("Location", cleanURL)
+	rw.WriteHeader(http.StatusFound)
+}
+
+// buildCleanURL builds URL without CST token parameter
+func (s *SSOBridge) buildCleanURL(req *http.Request) string {
+	scheme := "http"
+	if req.TLS != nil || req.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+
+	host := req.Host
+	if host == "" {
+		host = req.URL.Host
+	}
+
+	// Remove CST token parameter
+	q := req.URL.Query()
+	q.Del(s.config.CstTokenName)
+
+	// Build redirect URL
+	if len(q) > 0 {
+		return fmt.Sprintf("%s://%s%s?%s", scheme, host, req.URL.Path, q.Encode())
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, req.URL.Path)
+}
+
+// buildCookie creates authentication cookie
+func (s *SSOBridge) buildCookie(token string) *http.Cookie {
+	cookie := &http.Cookie{
+		Name:     s.config.CookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.config.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	if s.config.CookieDomain != "" {
+		cookie.Domain = s.config.CookieDomain
+	}
+
+	return cookie
 }
 
 // decryptToken decrypts the SSO token using DES-CBC

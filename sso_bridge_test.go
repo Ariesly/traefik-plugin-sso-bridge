@@ -315,6 +315,172 @@ func TestServeHTTP_InvalidCookie(t *testing.T) {
 	}
 }
 
+// TestHandleCookieAuth tests cookie authentication handler
+func TestHandleCookieAuth(t *testing.T) {
+	config := CreateConfig()
+	config.SecretKey = "TestKey8"
+	config.ServiceID = "test"
+
+	ctx := context.Background()
+	nextCalled := false
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		nextCalled = true
+		rw.WriteHeader(http.StatusOK)
+	})
+
+	handler, _ := New(ctx, next, config, "test")
+	plugin := handler.(*SSOBridge)
+
+	// Test with valid cookie
+	token, _ := plugin.encryptToken(map[string]string{
+		"ID":       "123",
+		"UserName": "testuser",
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/test", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "SSO_AUTH_TICKET",
+		Value: token,
+	})
+
+	result := plugin.handleCookieAuth(recorder, req)
+
+	if !result {
+		t.Error("Expected handleCookieAuth to return true for valid cookie")
+	}
+
+	if !nextCalled {
+		t.Error("Expected next handler to be called")
+	}
+
+	if req.Header.Get("X-Auth-User") != "testuser" {
+		t.Error("Expected X-Auth-User header to be set")
+	}
+}
+
+// TestHandleCookieAuth_NoCookie tests cookie handler without cookie
+func TestHandleCookieAuth_NoCookie(t *testing.T) {
+	config := CreateConfig()
+	config.SecretKey = "TestKey8"
+	config.ServiceID = "test"
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
+
+	handler, _ := New(ctx, next, config, "test")
+	plugin := handler.(*SSOBridge)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/test", nil)
+
+	result := plugin.handleCookieAuth(recorder, req)
+
+	if result {
+		t.Error("Expected handleCookieAuth to return false without cookie")
+	}
+}
+
+// TestBuildCleanURL tests clean URL building
+func TestBuildCleanURL(t *testing.T) {
+	config := CreateConfig()
+	config.CstTokenName = "cst"
+
+	plugin := &SSOBridge{config: config}
+
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{
+			"URL with CST token only",
+			"http://localhost/test?cst=token123",
+			"http://localhost/test",
+		},
+		{
+			"URL with CST token and other params",
+			"http://localhost/test?cst=token123&page=1&sort=name",
+			"http://localhost/test?page=1&sort=name",
+		},
+		{
+			"URL without CST token",
+			"http://localhost/test?page=1",
+			"http://localhost/test?page=1",
+		},
+		{
+			"URL without any params",
+			"http://localhost/test",
+			"http://localhost/test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			result := plugin.buildCleanURL(req)
+
+			if result != tt.expected {
+				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestBuildCleanURL_HTTPS tests HTTPS URL building
+func TestBuildCleanURL_HTTPS(t *testing.T) {
+	config := CreateConfig()
+	config.CstTokenName = "cst"
+
+	plugin := &SSOBridge{config: config}
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/test?cst=token", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	result := plugin.buildCleanURL(req)
+
+	expected := "https://localhost/test"
+	if result != expected {
+		t.Errorf("Expected '%s', got '%s'", expected, result)
+	}
+}
+
+// TestBuildCookie tests cookie building
+func TestBuildCookie(t *testing.T) {
+	config := &Config{
+		CookieName:   "TEST_COOKIE",
+		CookieDomain: ".example.com",
+		CookieSecure: true,
+	}
+
+	plugin := &SSOBridge{config: config}
+	cookie := plugin.buildCookie("test_token_value")
+
+	if cookie.Name != "TEST_COOKIE" {
+		t.Errorf("Expected Name='TEST_COOKIE', got '%s'", cookie.Name)
+	}
+
+	if cookie.Value != "test_token_value" {
+		t.Errorf("Expected Value='test_token_value', got '%s'", cookie.Value)
+	}
+
+	if cookie.Domain != ".example.com" {
+		t.Errorf("Expected Domain='.example.com', got '%s'", cookie.Domain)
+	}
+
+	if !cookie.Secure {
+		t.Error("Expected Secure=true")
+	}
+
+	if !cookie.HttpOnly {
+		t.Error("Expected HttpOnly=true")
+	}
+
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("Expected SameSite=Lax, got %v", cookie.SameSite)
+	}
+}
+
 // TestSetAuthHeaders tests that all auth headers are set correctly
 func TestSetAuthHeaders(t *testing.T) {
 	plugin := &SSOBridge{config: &Config{}}
