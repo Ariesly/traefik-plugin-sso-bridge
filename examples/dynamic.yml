@@ -30,16 +30,6 @@ http:
           cookieSecure: false
 
   routers:
-    # Example: Gitea
-    gitea-router:
-      rule: "Host(`git.yourcompany.com`)"
-      service: gitea-service
-      entryPoints:
-        - websecure
-      middlewares:
-        - sso-bridge-prod
-      tls: {}
-
     # Example: Grafana
     grafana-router:
       rule: "Host(`metrics.yourcompany.com`)"
@@ -51,11 +41,6 @@ http:
       tls: {}
 
   services:
-    gitea-service:
-      loadBalancer:
-        servers:
-          - url: "http://gitea:3000"
-
     grafana-service:
       loadBalancer:
         servers:
