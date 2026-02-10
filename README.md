@@ -30,7 +30,7 @@ experimental:
   plugins:
     sso-bridge:
       moduleName: "github.com/Ariesly/traefik-plugin-sso-bridge"
-      version: "v1.0.0"
+      version: "v1.1.0"
 ```
 
 ### 2. Dynamic Configuration
@@ -136,7 +136,7 @@ services:
     image: traefik:v3.0
     command:
       - "--experimental.plugins.sso-bridge.moduleName=github.com/Ariesly/traefik-plugin-sso-bridge"
-      - "--experimental.plugins.sso-bridge.version=v1.0.0"
+      - "--experimental.plugins.sso-bridge.version=v1.1.0"
     ports:
       - "80:80"
     volumes:
