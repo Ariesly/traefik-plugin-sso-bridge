@@ -1,8 +1,8 @@
 # Traefik Plugin: SSO Bridge
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Go Report](https://img.shields.io/badge/go%20report-A+-brightgreen)]()
-[![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![Build Status](https://github.com/Ariesly/traefik-plugin-sso-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ariesly/traefik-plugin-sso-bridge/actions)
+[![Go Report](https://goreportcard.com/badge/github.com/Ariesly/traefik-plugin-sso-bridge)](https://goreportcard.com/report/github.com/Ariesly/traefik-plugin-sso-bridge)
+[![License](https://img.shields.io/github/license/Ariesly/traefik-plugin-sso-bridge)](LICENSE)
 
 A Traefik middleware plugin that bridges legacy SSO systems to modern applications using DES encryption and SOAP validation.
 
