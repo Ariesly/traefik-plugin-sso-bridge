@@ -4,18 +4,19 @@
 [![Go Report](https://goreportcard.com/badge/github.com/Ariesly/traefik-plugin-sso-bridge)](https://goreportcard.com/report/github.com/Ariesly/traefik-plugin-sso-bridge)
 [![License](https://img.shields.io/github/license/Ariesly/traefik-plugin-sso-bridge)](LICENSE)
 
-A Traefik middleware plugin that bridges legacy SSO systems to modern applications using DES encryption and SOAP validation.
+A Traefik middleware plugin that bridges legacy SSO systems to modern applications combining legacy DES with a secure internal AES-256-GCM cookie architecture and robust SOAP validation.
 
 **Code Quality**: Cyclomatic complexity < 10 for all functions ✅
 
 ## Features
 
-- ✅ **DES-CBC Decryption** - Decrypt legacy SSO cookies
-- ✅ **CST Token Handling** - Extract and validate Service Tickets from CST tokens  
-- ✅ **SOAP Ticket Validation** - Validate tickets via SOAP web service
-- ✅ **Cookie Management** - Auto-generate cookies after ticket validation
-- ✅ **Triple Validation Strategy** - Cookie → CST Token → Login redirect
-- ✅ **Header Injection** - Inject user info for downstream apps
+- ✅ **Hybrid Cryptography** - Retains backward-compatible DES-CBC decryption for legacy SSO tokens while securing internal session state with industrial-grade **AES-256-GCM**.
+- ✅ **CST Token Handling** - Extract and validate Service Tickets from CST tokens 
+- ✅ **Secure SOAP Validation** - Validate tickets via SOAP web service using native XML marshaling preventing injections.
+- ✅ **High Performance** - Implements Keep-Alive Connection Pooling and AES pre-computations for minimal overhead.
+- ✅ **Cookie Management** - Auto-generate secure cookies after ticket validation.
+- ✅ **Triple Validation Strategy** - Cookie → CST Token → Login redirect.
+- ✅ **Header Injection** - Inject configurable user identification headers for downstream apps.
 
 ---
 
@@ -30,7 +31,7 @@ experimental:
   plugins:
     sso-bridge:
       moduleName: "github.com/Ariesly/traefik-plugin-sso-bridge"
-      version: "v1.1.0"
+      version: "v1.2.0"
 ```
 
 ### 2. Dynamic Configuration
@@ -51,6 +52,11 @@ http:
           serviceId: "your_service_id"
           cookieDomain: ".example.com"    # Optional
           cookieSecure: true              # Use true for HTTPS
+          soapAction: "http://sso.indigox.net/ValidateServiceTicket" # Optional
+          soapNamespace: "http://sso.indigox.net/" # Optional
+          authHeaders:
+            - "X-Auth-User"
+            - "X-Auth-ID"
 ```
 
 ### 3. Apply to Routes
@@ -71,7 +77,7 @@ http:
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `secretKey` | string | ✅ Yes | - | 8-character DES key |
+| `secretKey` | string | ✅ Yes | - | 8-character DES key (Used to derive AES key internally) |
 | `cookieName` | string | ❌ No | `SSO_AUTH_TICKET` | Cookie name |
 | `cstTokenName` | string | ❌ No | `cst` | URL parameter name for CST token |
 | `ssoLoginUrl` | string | ✅ Yes | - | SSO login page URL |
@@ -79,6 +85,9 @@ http:
 | `serviceId` | string | ✅ Yes | - | Service ID in SSO system |
 | `cookieDomain` | string | ❌ No | - | Cookie domain (e.g., `.example.com`) |
 | `cookieSecure` | bool | ❌ No | `false` | Enable secure flag (HTTPS) |
+| `soapAction` | string | ❌ No | `http://sso.indigox.net/ValidateServiceTicket` | XML SOAPAction Header |
+| `soapNamespace` | string | ❌ No | `http://sso.indigox.net/` | The namespace payload attribute prefix |
+| `authHeaders` | []string | ❌ No | `["X-Auth-User", "X-Auth-ID"]` | Request headers dynamically injected downstream |
 
 ---
 
@@ -136,7 +145,7 @@ services:
     image: traefik:v3.0
     command:
       - "--experimental.plugins.sso-bridge.moduleName=github.com/Ariesly/traefik-plugin-sso-bridge"
-      - "--experimental.plugins.sso-bridge.version=v1.1.0"
+      - "--experimental.plugins.sso-bridge.version=v1.2.0"
     ports:
       - "80:80"
     volumes:

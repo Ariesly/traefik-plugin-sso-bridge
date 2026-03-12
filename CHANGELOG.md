@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.2.0] - 2026-03-12
+
+### Security
+- **Critical Vulnerability Fix**: Upgraded internal Cookie encryption from legacy DES-CBC to modern **AES-256-GCM**, securely hashing the 8-byte secret key with SHA-256 to leverage authenticated encryption.
+- **XML Injection Defense**: Hardened SOAP payload generation by replacing manual string formatting with native `xml.Marshal` and strong struct modeling.
+- **Padding Oracle Defense**: Hardened the legacy PKCS7 padding parsing loop to reject malicious blocks explicitly.
+
+### Changed
+- **Performance Enhancement**: Instantiated a global HTTP connection pool (`http.Client`) during middleware creation instead of per-request, significantly reducing CPU load and TCP handshake overhead.
+- **Stability Improvement**: Improved CST Token validation handling to proactively return HTTP 502/504 on network/upstream XML failures, preventing infinite redirect loop conditions.
+- **Bug Fix**: Fixed a bug where `ssoLoginUrl` query parameters were not respected properly when appending the `returnURL` redirect.
+
+### Added
+- Created `soapAction` configuration (default: `http://sso.indigox.net/ValidateServiceTicket`) enabling custom endpoint routing.
+- Created `soapNamespace` configuration (default: `http://sso.indigox.net/`) eliminating hardcoded domain constraints.
+- Fixed a bug where `authHeaders` overriding did correctly propagate configuration downward. Added unit test validation for edge-case boundaries.
+
+---
+
 ## [v1.1.0] - 2026-02-08
 
 ### Changed

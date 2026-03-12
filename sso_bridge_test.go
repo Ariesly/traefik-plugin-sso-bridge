@@ -25,6 +25,14 @@ func TestCreateConfig(t *testing.T) {
 	if config.CookieSecure {
 		t.Error("Expected CookieSecure=false by default")
 	}
+
+	if config.SOAPAction != "http://sso.indigox.net/ValidateServiceTicket" {
+		t.Errorf("Expected SOAPAction='http://sso.indigox.net/ValidateServiceTicket', got '%s'", config.SOAPAction)
+	}
+
+	if config.SOAPNamespace != "http://sso.indigox.net/" {
+		t.Errorf("Expected SOAPNamespace='http://sso.indigox.net/', got '%s'", config.SOAPNamespace)
+	}
 }
 
 // TestNew_ValidConfig tests plugin creation with valid config
@@ -50,6 +58,14 @@ func TestNew_ValidConfig(t *testing.T) {
 	plugin := handler.(*SSOBridge)
 	if plugin.config.CstTokenName != "cst" {
 		t.Errorf("Expected default CstTokenName='cst', got '%s'", plugin.config.CstTokenName)
+	}
+
+	if plugin.config.SOAPAction != "http://sso.indigox.net/ValidateServiceTicket" {
+		t.Errorf("Expected default SOAPAction='http://sso.indigox.net/ValidateServiceTicket', got '%s'", plugin.config.SOAPAction)
+	}
+
+	if plugin.config.SOAPNamespace != "http://sso.indigox.net/" {
+		t.Errorf("Expected default SOAPNamespace='http://sso.indigox.net/', got '%s'", plugin.config.SOAPNamespace)
 	}
 }
 
@@ -124,9 +140,11 @@ func TestNew_MissingServiceID(t *testing.T) {
 func TestEncryptDecrypt(t *testing.T) {
 	config := &Config{
 		SecretKey: "TestKey8",
+		ServiceID: "test",
 	}
 
-	plugin := &SSOBridge{config: config}
+	handler, _ := New(context.Background(), nil, config, "test")
+	plugin := handler.(*SSOBridge)
 
 	original := map[string]string{
 		"ID":       "12345",
@@ -155,13 +173,52 @@ func TestEncryptDecrypt(t *testing.T) {
 	}
 }
 
+// TestEncryptDecryptCookieData tests AES-GCM encryption and decryption roundtrip for cookies
+func TestEncryptDecryptCookieData(t *testing.T) {
+	config := &Config{
+		SecretKey: "TestKey8",
+		ServiceID: "test",
+	}
+
+	handler, _ := New(context.Background(), nil, config, "test")
+	plugin := handler.(*SSOBridge)
+
+	original := map[string]string{
+		"ID":       "12345",
+		"UserName": "testuser",
+	}
+
+	// Encrypt
+	encrypted, err := plugin.encryptCookieData(original)
+	if err != nil {
+		t.Fatalf("Encryption failed: %v", err)
+	}
+
+	// Decrypt
+	decrypted, err := plugin.decryptCookieData(encrypted)
+	if err != nil {
+		t.Fatalf("Decryption failed: %v", err)
+	}
+
+	// Verify
+	if decrypted["UserName"] != original["UserName"] {
+		t.Errorf("UserName mismatch: got '%s', want '%s'", decrypted["UserName"], original["UserName"])
+	}
+
+	if decrypted["ID"] != original["ID"] {
+		t.Errorf("ID mismatch: got '%s', want '%s'", decrypted["ID"], original["ID"])
+	}
+}
+
 // TestDecryptToken_ValidToken tests decryption with manually created token
 func TestDecryptToken_ValidToken(t *testing.T) {
 	config := &Config{
 		SecretKey: "TestKey8",
+		ServiceID: "test",
 	}
 
-	plugin := &SSOBridge{config: config}
+	handler, _ := New(context.Background(), nil, config, "test")
+	plugin := handler.(*SSOBridge)
 
 	// Create test token manually
 	plainText := "ID=test123;UserName=john.doe;ServiceTicket=ST-12345"
@@ -256,7 +313,7 @@ func TestServeHTTP_ValidCookie(t *testing.T) {
 
 	// Create valid token
 	plugin := handler.(*SSOBridge)
-	token, _ := plugin.encryptToken(map[string]string{
+	token, _ := plugin.encryptCookieData(map[string]string{
 		"ID":       "123",
 		"UserName": "testuser",
 	})
@@ -332,7 +389,7 @@ func TestHandleCookieAuth(t *testing.T) {
 	plugin := handler.(*SSOBridge)
 
 	// Test with valid cookie
-	token, _ := plugin.encryptToken(map[string]string{
+	token, _ := plugin.encryptCookieData(map[string]string{
 		"ID":       "123",
 		"UserName": "testuser",
 	})
@@ -483,28 +540,65 @@ func TestBuildCookie(t *testing.T) {
 
 // TestSetAuthHeaders tests that all auth headers are set correctly
 func TestSetAuthHeaders(t *testing.T) {
-	plugin := &SSOBridge{config: &Config{}}
-
-	req := httptest.NewRequest(http.MethodGet, "http://localhost/test", nil)
-
-	userData := map[string]string{
-		"UserName": "john.doe",
-		"ID":       "12345",
+	tests := []struct {
+		name          string
+		configHeaders []string
+		expectedUser  string
+		expectedID    string
+	}{
+		{
+			name:          "Default headers",
+			configHeaders: []string{"X-Auth-User", "X-Auth-ID"},
+			expectedUser:  "X-Auth-User",
+			expectedID:    "X-Auth-ID",
+		},
+		{
+			name:          "Custom headers",
+			configHeaders: []string{"X-Custom-Username", "X-Custom-Userid"},
+			expectedUser:  "X-Custom-Username",
+			expectedID:    "X-Custom-Userid",
+		},
+		{
+			name:          "Empty headers",
+			configHeaders: []string{},
+			expectedUser:  "X-Auth-User", // Should fallback gracefully
+			expectedID:    "X-Auth-ID",
+		},
+		{
+			name:          "Partial headers",
+			configHeaders: []string{"X-Single-Header"},
+			expectedUser:  "X-Single-Header",
+			expectedID:    "X-Auth-ID", // Second should fallback
+		},
 	}
 
-	plugin.setAuthHeaders(req, userData)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &SSOBridge{config: &Config{
+				AuthHeaders: tt.configHeaders,
+			}}
 
-	// Verify headers are set on request
-	if got := req.Header.Get("X-Auth-User"); got != "john.doe" {
-		t.Errorf("X-Auth-User: expected 'john.doe', got '%s'", got)
-	}
+			req := httptest.NewRequest(http.MethodGet, "http://localhost/test", nil)
 
-	if got := req.Header.Get("X-Auth-ID"); got != "12345" {
-		t.Errorf("X-Auth-ID: expected '12345', got '%s'", got)
-	}
+			userData := map[string]string{
+				"UserName": "john.doe",
+				"ID":       "12345",
+			}
 
-	if got := req.Header.Get("X-Auth-Source"); got != "SSO-Bridge-Plugin" {
-		t.Errorf("X-Auth-Source: expected 'SSO-Bridge-Plugin', got '%s'", got)
+			plugin.setAuthHeaders(req, userData)
+
+			if got := req.Header.Get(tt.expectedUser); got != "john.doe" {
+				t.Errorf("%s: expected 'john.doe', got '%s'", tt.expectedUser, got)
+			}
+
+			if got := req.Header.Get(tt.expectedID); got != "12345" {
+				t.Errorf("%s: expected '12345', got '%s'", tt.expectedID, got)
+			}
+
+			if got := req.Header.Get("X-Auth-Source"); got != "SSO-Bridge-Plugin" {
+				t.Errorf("X-Auth-Source: expected 'SSO-Bridge-Plugin', got '%s'", got)
+			}
+		})
 	}
 }
 
@@ -568,6 +662,12 @@ func TestRemovePadding(t *testing.T) {
 			[]byte{1, 2, 3},
 			"valid padding (1)",
 			false,
+		},
+		{
+			[]byte{1, 2, 3, 4, 4, 3, 4, 4},
+			nil,
+			"invalid padding byte inside",
+			true,
 		},
 		{
 			[]byte{},

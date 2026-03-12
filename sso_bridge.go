@@ -4,11 +4,15 @@ package traefik_plugin_sso_bridge
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
 	"crypto/cipher"
 	"crypto/des"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,23 +30,29 @@ type Config struct {
 	CookieDomain     string   `json:"cookieDomain,omitempty"`
 	CookieSecure     bool     `json:"cookieSecure,omitempty"`
 	AuthHeaders      []string `json:"authHeaders,omitempty"`
+	SOAPAction       string   `json:"soapAction,omitempty"`
+	SOAPNamespace    string   `json:"soapNamespace,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration
 func CreateConfig() *Config {
 	return &Config{
-		CookieName:   "SSO_AUTH_TICKET",
-		CstTokenName: "cst",
-		CookieSecure: false,
-		AuthHeaders:  []string{"X-Auth-User", "X-Auth-ID"},
+		CookieName:    "SSO_AUTH_TICKET",
+		CstTokenName:  "cst",
+		CookieSecure:  false,
+		AuthHeaders:   []string{"X-Auth-User", "X-Auth-ID"},
+		SOAPAction:    "http://sso.indigox.net/ValidateServiceTicket",
+		SOAPNamespace: "http://sso.indigox.net/",
 	}
 }
 
 // SSOBridge is the main plugin struct
 type SSOBridge struct {
-	next   http.Handler
-	name   string
-	config *Config
+	next         http.Handler
+	name         string
+	config       *Config
+	httpClient   *http.Client
+	cookieAESGCM cipher.AEAD
 }
 
 // New creates a new SSO Bridge plugin
@@ -64,10 +74,31 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		config.CstTokenName = "cst"
 	}
 
+	if config.SOAPAction == "" {
+		config.SOAPAction = "http://sso.indigox.net/ValidateServiceTicket"
+	}
+
+	if config.SOAPNamespace == "" {
+		config.SOAPNamespace = "http://sso.indigox.net/"
+	}
+
+	keyHash := sha256.Sum256([]byte(config.SecretKey))
+	block, err := aes.NewCipher(keyHash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create aes cipher: %w", err)
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gcm: %w", err)
+	}
+
 	return &SSOBridge{
-		next:   next,
-		name:   name,
-		config: config,
+		next:         next,
+		name:         name,
+		config:       config,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		cookieAESGCM: aesgcm,
 	}, nil
 }
 
@@ -94,7 +125,7 @@ func (s *SSOBridge) handleCookieAuth(rw http.ResponseWriter, req *http.Request) 
 		return false
 	}
 
-	userData, err := s.decryptToken(cookie.Value)
+	userData, err := s.decryptCookieData(cookie.Value)
 	if err != nil || userData["UserName"] == "" {
 		return false
 	}
@@ -125,8 +156,14 @@ func (s *SSOBridge) handleCstTokenAuth(rw http.ResponseWriter, req *http.Request
 	}
 
 	// Step 3: Validate ServiceTicket via SOAP
-	userData, err := s.validateTicketViaSOAP(serviceTicket)
+	userData, err := s.validateTicketViaSOAP(req.Context(), serviceTicket)
 	if err != nil {
+		// Stop infinite redirect loops on network failures by returning 502/504 directly
+		if strings.HasPrefix(err.Error(), "network_error") {
+			rw.WriteHeader(http.StatusBadGateway)
+			rw.Write([]byte("502 Bad Gateway: SSO validation service is unavailable"))
+			return true
+		}
 		return false
 	}
 
@@ -146,7 +183,7 @@ func (s *SSOBridge) handleCstTokenAuth(rw http.ResponseWriter, req *http.Request
 
 // setCookieAndRedirect sets authentication cookie and redirects to clean URL
 func (s *SSOBridge) setCookieAndRedirect(rw http.ResponseWriter, req *http.Request, userData map[string]string) {
-	encryptedToken, err := s.encryptToken(userData)
+	encryptedToken, err := s.encryptCookieData(userData)
 	if err != nil {
 		s.redirectToLogin(rw, req)
 		return
@@ -274,35 +311,62 @@ type ValidateResponse struct {
 	} `xml:"Body"`
 }
 
-// validateTicketViaSOAP validates the ServiceTicket using SOAP
-func (s *SSOBridge) validateTicketViaSOAP(ticket string) (map[string]string, error) {
-	soapEnvelope := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <ValidateServiceTicket xmlns="http://sso.indigox.net/">
-      <ticketToken>%s</ticketToken>
-      <serviceID>%s</serviceID>
-    </ValidateServiceTicket>
-  </soap:Body>
-</soap:Envelope>`, ticket, s.config.ServiceID)
+// SOAPRequest models the overall SOAP envelope request structure
+type SOAPRequest struct {
+	XMLName xml.Name `xml:"soap:Envelope"`
+	Xmlns   string   `xml:"xmlns:soap,attr"`
+	Body    SOAPRequestBody
+}
 
-	req, err := http.NewRequest("POST", s.config.TicketServiceURL, bytes.NewBufferString(soapEnvelope))
+// SOAPRequestBody holds the Body content of the SOAP Request
+type SOAPRequestBody struct {
+	XMLName xml.Name `xml:"soap:Body"`
+	Content interface{}
+}
+
+// ValidateServiceTicketRequest models the specific payload for a ValidateServiceTicket query
+type ValidateServiceTicketRequest struct {
+	XMLName   xml.Name
+	Ticket    string `xml:"ticketToken"`
+	ServiceID string `xml:"serviceID"`
+}
+
+// validateTicketViaSOAP validates the ServiceTicket using SOAP
+func (s *SSOBridge) validateTicketViaSOAP(ctx context.Context, ticket string) (map[string]string, error) {
+	reqPayload := SOAPRequest{
+		Xmlns: "http://schemas.xmlsoap.org/soap/envelope/",
+		Body: SOAPRequestBody{
+			Content: ValidateServiceTicketRequest{
+				XMLName:   xml.Name{Space: s.config.SOAPNamespace, Local: "ValidateServiceTicket"},
+				Ticket:    ticket,
+				ServiceID: s.config.ServiceID,
+			},
+		},
+	}
+
+	xmlBytes, err := xml.Marshal(reqPayload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal soap request: %w", err)
+	}
+
+	soapEnvelope := append([]byte(xml.Header), xmlBytes...)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", s.config.TicketServiceURL, bytes.NewReader(soapEnvelope))
+	if err != nil {
+		return nil, fmt.Errorf("network_error: request creation failed: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-	req.Header.Set("SOAPAction", "http://sso.indigox.net/ValidateServiceTicket")
+	req.Header.Set("SOAPAction", s.config.SOAPAction)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("network_error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("soap request failed with status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("network_error: soap request failed with status: %d", resp.StatusCode)
 	}
 
 	var res ValidateResponse
@@ -338,11 +402,23 @@ func (s *SSOBridge) parseTicketData(plainText string) map[string]string {
 
 // setAuthHeaders sets authentication headers for downstream services
 func (s *SSOBridge) setAuthHeaders(req *http.Request, userData map[string]string) {
+	// Default header names if config is malformed or empty
+	userHeader := "X-Auth-User"
+	idHeader := "X-Auth-ID"
+
+	// Map configured headers if available
+	if len(s.config.AuthHeaders) > 0 {
+		userHeader = s.config.AuthHeaders[0]
+	}
+	if len(s.config.AuthHeaders) > 1 {
+		idHeader = s.config.AuthHeaders[1]
+	}
+
 	if username := userData["UserName"]; username != "" {
-		req.Header.Set("X-Auth-User", username)
+		req.Header.Set(userHeader, username)
 	}
 	if userID := userData["ID"]; userID != "" {
-		req.Header.Set("X-Auth-ID", userID)
+		req.Header.Set(idHeader, userID)
 	}
 	req.Header.Set("X-Auth-Source", "SSO-Bridge-Plugin")
 }
@@ -372,9 +448,15 @@ func (s *SSOBridge) redirectToLogin(rw http.ResponseWriter, req *http.Request) {
 		currentURL = fmt.Sprintf("%s://%s%s", scheme, host, req.URL.Path)
 	}
 
-	// Build SSO login URL
-	loginURL := fmt.Sprintf("%s?returnURL=%s&service=%s",
+	// Build SSO login URL gracefully handling existing query params
+	separator := "?"
+	if strings.Contains(s.config.SSOLoginURL, "?") {
+		separator = "&"
+	}
+
+	loginURL := fmt.Sprintf("%s%sreturnURL=%s&service=%s",
 		s.config.SSOLoginURL,
+		separator,
 		url.QueryEscape(currentURL),
 		url.QueryEscape(s.config.ServiceID))
 
@@ -400,5 +482,50 @@ func (s *SSOBridge) removePadding(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid padding")
 	}
 
+	// Verify all padding bytes are correct
+	for i := length - padding; i < length; i++ {
+		if int(data[i]) != padding {
+			return nil, fmt.Errorf("invalid padding byte")
+		}
+	}
+
 	return data[:length-padding], nil
+}
+
+// encryptCookieData encrypts internal session data using AES-GCM
+func (s *SSOBridge) encryptCookieData(userData map[string]string) (string, error) {
+	var parts []string
+	for k, v := range userData {
+		parts = append(parts, fmt.Sprintf("%s=%s", k, url.QueryEscape(v)))
+	}
+	plainText := strings.Join(parts, ";")
+
+	nonce := make([]byte, s.cookieAESGCM.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := s.cookieAESGCM.Seal(nonce, nonce, []byte(plainText), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// decryptCookieData decrypts internal session data using AES-GCM
+func (s *SSOBridge) decryptCookieData(token string) (map[string]string, error) {
+	data, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceSize := s.cookieAESGCM.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := s.cookieAESGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.parseTicketData(string(plaintext)), nil
 }
