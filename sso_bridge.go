@@ -161,7 +161,7 @@ func (s *SSOBridge) handleCstTokenAuth(rw http.ResponseWriter, req *http.Request
 		// Stop infinite redirect loops on network failures by returning 502/504 directly
 		if strings.HasPrefix(err.Error(), "network_error") {
 			rw.WriteHeader(http.StatusBadGateway)
-			rw.Write([]byte("502 Bad Gateway: SSO validation service is unavailable"))
+			_, _ = rw.Write([]byte("502 Bad Gateway: SSO validation service is unavailable"))
 			return true
 		}
 		return false
