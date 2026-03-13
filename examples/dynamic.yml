@@ -8,6 +8,7 @@ http:
       plugin:
         sso-bridge:
           secretKey: "Prod8Key"
+          cookieSecret: "YOUR_32_CHAR_RANDOM_SECRET_KEY_!!"
           cookieName: "SSO_AUTH_TICKET"
           cstTokenName: "cst"
           ssoLoginUrl: "https://sso.yourcompany.com/Login.aspx"

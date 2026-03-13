@@ -9,6 +9,7 @@ testData:
   secretKey: "TestKey8"
   cookieName: "SSO_AUTH_TICKET"
   cstTokenName: "cst"
+  cookieSecret: "12345678901234567890123456789012"
   ssoLoginUrl: "http://sso.example.com/Login.aspx"
   ticketServiceUrl: "http://sso.example.com/Ticket.asmx"
   serviceId: "test_service"

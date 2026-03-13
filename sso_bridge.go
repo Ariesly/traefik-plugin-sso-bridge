@@ -22,6 +22,7 @@ import (
 // Config holds the plugin configuration
 type Config struct {
 	SecretKey        string   `json:"secretKey,omitempty"`
+	CookieSecret     string   `json:"cookieSecret,omitempty"`
 	CookieName       string   `json:"cookieName,omitempty"`
 	CstTokenName     string   `json:"cstTokenName,omitempty"`
 	SSOLoginURL      string   `json:"ssoLoginUrl,omitempty"`
@@ -82,8 +83,18 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		config.SOAPNamespace = "http://sso.indigox.net/"
 	}
 
-	keyHash := sha256.Sum256([]byte(config.SecretKey))
-	block, err := aes.NewCipher(keyHash[:])
+	var aesKey []byte
+	if config.CookieSecret != "" {
+		if len(config.CookieSecret) != 32 {
+			return nil, fmt.Errorf("cookieSecret must be exactly 32 characters if provided")
+		}
+		aesKey = []byte(config.CookieSecret)
+	} else {
+		keyHash := sha256.Sum256([]byte(config.SecretKey))
+		aesKey = keyHash[:]
+	}
+
+	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create aes cipher: %w", err)
 	}

@@ -78,6 +78,7 @@ http:
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `secretKey` | string | ✅ Yes | - | 8-character DES key (Used to derive AES key internally) |
+| `cookieSecret` | string | ❌ No | - | Optional 32-character key for independent internal AES-256 Cookie Encryption |
 | `cookieName` | string | ❌ No | `SSO_AUTH_TICKET` | Cookie name |
 | `cstTokenName` | string | ❌ No | `cst` | URL parameter name for CST token |
 | `ssoLoginUrl` | string | ✅ Yes | - | SSO login page URL |

@@ -67,6 +67,20 @@ func TestNew_ValidConfig(t *testing.T) {
 	if plugin.config.SOAPNamespace != "http://sso.indigox.net/" {
 		t.Errorf("Expected default SOAPNamespace='http://sso.indigox.net/', got '%s'", plugin.config.SOAPNamespace)
 	}
+
+	// Test Valid CookieSecret
+	configWithCookieSecret := &Config{
+		SecretKey:    "TestKey8",
+		ServiceID:    "test_service",
+		CookieSecret: "12345678901234567890123456789012", // 32 bytes
+	}
+	handlerWithSecret, err := New(ctx, next, configWithCookieSecret, "test-plugin")
+	if err != nil {
+		t.Fatalf("Failed to create plugin with valid CookieSecret: %v", err)
+	}
+	if handlerWithSecret == nil {
+		t.Fatal("Handler with CookieSecret should not be nil")
+	}
 }
 
 // TestNew_MissingSecretKey tests plugin creation fails without secretKey
@@ -114,6 +128,27 @@ func TestNew_InvalidSecretKeyLength(t *testing.T) {
 				t.Errorf("Expected error for secretKey '%s'", tt.secretKey)
 			}
 		})
+	}
+}
+
+// TestNew_InvalidCookieSecretLength tests plugin creation fails with wrong cookie secret length
+func TestNew_InvalidCookieSecretLength(t *testing.T) {
+	config := &Config{
+		SecretKey:    "TestKey8",
+		ServiceID:    "test",
+		CookieSecret: "too_short_secret", // Not 32 bytes
+	}
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
+
+	_, err := New(ctx, next, config, "test")
+	if err == nil {
+		t.Error("Expected error for invalid cookieSecret length")
+	}
+	
+	if err != nil && err.Error() != "cookieSecret must be exactly 32 characters if provided" {
+		t.Errorf("Unexpected error message: %v", err)
 	}
 }
 
@@ -178,6 +213,7 @@ func TestEncryptDecryptCookieData(t *testing.T) {
 	config := &Config{
 		SecretKey: "TestKey8",
 		ServiceID: "test",
+		CookieSecret: "12345678901234567890123456789012",
 	}
 
 	handler, _ := New(context.Background(), nil, config, "test")
