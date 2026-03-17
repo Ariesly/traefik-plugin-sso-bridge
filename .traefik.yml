@@ -15,6 +15,7 @@ testData:
   serviceId: "test_service"
   cookieDomain: ".example.com"
   cookieSecure: false
+  cookieMaxAge: 28800
   soapAction: "http://sso.indigox.net/ValidateServiceTicket"
   soapNamespace: "http://sso.indigox.net/"
   authHeaders: ["X-Auth-User", "X-Auth-ID"]

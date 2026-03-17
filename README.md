@@ -31,7 +31,7 @@ experimental:
   plugins:
     sso-bridge:
       moduleName: "github.com/Ariesly/traefik-plugin-sso-bridge"
-      version: "v1.2.0"
+      version: "v1.3.0"
 ```
 
 ### 2. Dynamic Configuration
@@ -52,6 +52,7 @@ http:
           serviceId: "your_service_id"
           cookieDomain: ".example.com"    # Optional
           cookieSecure: true              # Use true for HTTPS
+          cookieMaxAge: 28800             # Expiration in seconds (8 hours)
           soapAction: "http://sso.indigox.net/ValidateServiceTicket" # Optional
           soapNamespace: "http://sso.indigox.net/" # Optional
           authHeaders:
@@ -86,6 +87,7 @@ http:
 | `serviceId` | string | ✅ Yes | - | Service ID in SSO system |
 | `cookieDomain` | string | ❌ No | - | Cookie domain (e.g., `.example.com`) |
 | `cookieSecure` | bool | ❌ No | `false` | Enable secure flag (HTTPS) |
+| `cookieMaxAge` | int | ❌ No | `28800` | Optional cookie expiration in seconds (default is 8 hours) |
 | `soapAction` | string | ❌ No | `http://sso.indigox.net/ValidateServiceTicket` | XML SOAPAction Header |
 | `soapNamespace` | string | ❌ No | `http://sso.indigox.net/` | The namespace payload attribute prefix |
 | `authHeaders` | []string | ❌ No | `["X-Auth-User", "X-Auth-ID"]` | Request headers dynamically injected downstream |
@@ -146,7 +148,7 @@ services:
     image: traefik:v3.0
     command:
       - "--experimental.plugins.sso-bridge.moduleName=github.com/Ariesly/traefik-plugin-sso-bridge"
-      - "--experimental.plugins.sso-bridge.version=v1.2.0"
+      - "--experimental.plugins.sso-bridge.version=v1.3.0"
     ports:
       - "80:80"
     volumes:

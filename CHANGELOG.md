@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.3.0] - 2026-03-17
+
+### Security & Reliability
+- **Strict Verification Validation**: Enforced hard start-up requirement of `ssoLoginUrl` and `ticketServiceUrl` in configuration, immediately failing loud if missing to prevent deployment failures at runtime.
+- **Timing Attack Mitigation**: Upgraded legacy PKCS#7 block parser to utilize standard `crypto/subtle.ConstantTimeCompare()`, preventing padding-oracle side-channel attacks globally.
+- **CST Secure Fallback**: Re-introduced the legacy fallback to extract UserNames from validated CST context when absent from the primary XML response.
+- **DOS Protection**: Prevented deliberate memory exhaustion (DoS attacks) by wrapping XML parsing bounds via `io.LimitReader` within `validateTicketViaSOAP`.
+- **Persistent State Control**: Formalized `cookieMaxAge` setting (default: 8 hours) to explicitly enforce expiration rather than risking unexpected session persistence over multiple tabs.
+
+---
+
 ## [v1.2.0] - 2026-03-12
 
 ### Security
