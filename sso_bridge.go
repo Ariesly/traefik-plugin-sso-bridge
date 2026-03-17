@@ -394,7 +394,9 @@ func (s *SSOBridge) validateTicketViaSOAP(ctx context.Context, ticket string) (m
 	if err != nil {
 		return nil, fmt.Errorf("network_error: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("network_error: soap request failed with status: %d", resp.StatusCode)

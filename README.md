@@ -169,16 +169,24 @@ services:
 
 ## Development
 
-### Run Tests
+### Available Commands
+
+- `make fmt`: Format code with `gofmt`.
+- `make lint`: Run `golangci-lint`.
+- `make test`: Run all unit tests.
+
+### Manual Run
+
+#### Run Tests
 
 ```bash
-go test -v
+go test -v ./...
 ```
 
-### Build
+#### Build
 
 ```bash
-go build
+go build ./...
 ```
 
 ---

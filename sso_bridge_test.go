@@ -151,7 +151,7 @@ func TestNew_InvalidCookieSecretLength(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for invalid cookieSecret length")
 	}
-	
+
 	if err != nil && err.Error() != "cookieSecret must be exactly 32 characters if provided" {
 		t.Errorf("Unexpected error message: %v", err)
 	}
@@ -798,5 +798,3 @@ func TestRemovePadding(t *testing.T) {
 		})
 	}
 }
-
-
