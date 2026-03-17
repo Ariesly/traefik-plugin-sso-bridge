@@ -12,6 +12,8 @@ http:
           cookieName: "SSO_AUTH_TICKET"
           cstTokenName: "cst"
           ssoLoginUrl: "https://sso.yourcompany.com/Login.aspx"
+          ticketServiceUrl: "https://sso.yourcompany.com/Ticket.asmx"
+          serviceId: "production_service_id"
           cookieDomain: ".yourcompany.com"
           cookieSecure: true
           soapAction: "http://sso.yourcompany.com/ValidateServiceTicket"

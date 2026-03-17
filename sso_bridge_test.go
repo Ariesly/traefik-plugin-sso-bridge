@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -38,8 +39,10 @@ func TestCreateConfig(t *testing.T) {
 // TestNew_ValidConfig tests plugin creation with valid config
 func TestNew_ValidConfig(t *testing.T) {
 	config := &Config{
-		SecretKey: "TestKey8",
-		ServiceID: "test_service",
+		SecretKey:        "TestKey8",
+		ServiceID:        "test_service",
+		SSOLoginURL:      "http://sso.example.com/login",
+		TicketServiceURL: "http://sso.example.com/ticket",
 	}
 
 	ctx := context.Background()
@@ -70,9 +73,11 @@ func TestNew_ValidConfig(t *testing.T) {
 
 	// Test Valid CookieSecret
 	configWithCookieSecret := &Config{
-		SecretKey:    "TestKey8",
-		ServiceID:    "test_service",
-		CookieSecret: "12345678901234567890123456789012", // 32 bytes
+		SecretKey:        "TestKey8",
+		ServiceID:        "test_service",
+		SSOLoginURL:      "http://sso.example.com/login",
+		TicketServiceURL: "http://sso.example.com/ticket",
+		CookieSecret:     "12345678901234567890123456789012", // 32 bytes
 	}
 	handlerWithSecret, err := New(ctx, next, configWithCookieSecret, "test-plugin")
 	if err != nil {
@@ -171,11 +176,57 @@ func TestNew_MissingServiceID(t *testing.T) {
 	}
 }
 
+// TestNew_MissingSSOLoginURL tests plugin creation fails without ssoLoginUrl
+func TestNew_MissingSSOLoginURL(t *testing.T) {
+	config := &Config{
+		SecretKey:        "TestKey8",
+		ServiceID:        "test_service",
+		TicketServiceURL: "http://sso.example.com/ticket",
+		// SSOLoginURL intentionally omitted
+	}
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
+
+	_, err := New(ctx, next, config, "test")
+	if err == nil {
+		t.Error("Expected error for missing ssoLoginUrl")
+	}
+
+	if err != nil && err.Error() != "ssoLoginUrl is required" {
+		t.Errorf("Unexpected error message: %v", err)
+	}
+}
+
+// TestNew_MissingTicketServiceURL tests plugin creation fails without ticketServiceUrl
+func TestNew_MissingTicketServiceURL(t *testing.T) {
+	config := &Config{
+		SecretKey:   "TestKey8",
+		ServiceID:   "test_service",
+		SSOLoginURL: "http://sso.example.com/login",
+		// TicketServiceURL intentionally omitted
+	}
+
+	ctx := context.Background()
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
+
+	_, err := New(ctx, next, config, "test")
+	if err == nil {
+		t.Error("Expected error for missing ticketServiceUrl")
+	}
+
+	if err != nil && err.Error() != "ticketServiceUrl is required" {
+		t.Errorf("Unexpected error message: %v", err)
+	}
+}
+
 // TestEncryptDecrypt tests encryption and decryption roundtrip
 func TestEncryptDecrypt(t *testing.T) {
 	config := &Config{
-		SecretKey: "TestKey8",
-		ServiceID: "test",
+		SecretKey:        "TestKey8",
+		ServiceID:        "test",
+		SSOLoginURL:      "http://sso.example.com/login",
+		TicketServiceURL: "http://sso.example.com/ticket",
 	}
 
 	handler, _ := New(context.Background(), nil, config, "test")
@@ -211,9 +262,11 @@ func TestEncryptDecrypt(t *testing.T) {
 // TestEncryptDecryptCookieData tests AES-GCM encryption and decryption roundtrip for cookies
 func TestEncryptDecryptCookieData(t *testing.T) {
 	config := &Config{
-		SecretKey: "TestKey8",
-		ServiceID: "test",
-		CookieSecret: "12345678901234567890123456789012",
+		SecretKey:        "TestKey8",
+		ServiceID:        "test",
+		SSOLoginURL:      "http://sso.example.com/login",
+		TicketServiceURL: "http://sso.example.com/ticket",
+		CookieSecret:     "12345678901234567890123456789012",
 	}
 
 	handler, _ := New(context.Background(), nil, config, "test")
@@ -249,8 +302,10 @@ func TestEncryptDecryptCookieData(t *testing.T) {
 // TestDecryptToken_ValidToken tests decryption with manually created token
 func TestDecryptToken_ValidToken(t *testing.T) {
 	config := &Config{
-		SecretKey: "TestKey8",
-		ServiceID: "test",
+		SecretKey:        "TestKey8",
+		ServiceID:        "test",
+		SSOLoginURL:      "http://sso.example.com/login",
+		TicketServiceURL: "http://sso.example.com/ticket",
 	}
 
 	handler, _ := New(context.Background(), nil, config, "test")
@@ -292,6 +347,7 @@ func TestServeHTTP_NoCookie_NoToken(t *testing.T) {
 	config.SecretKey = "TestKey8"
 	config.ServiceID = "test"
 	config.SSOLoginURL = "http://sso.example.com/login"
+	config.TicketServiceURL = "http://sso.example.com/ticket"
 
 	ctx := context.Background()
 	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -318,7 +374,7 @@ func TestServeHTTP_NoCookie_NoToken(t *testing.T) {
 		t.Error("Expected Location header to be set")
 	}
 
-	if !contains(location, "sso.example.com") {
+	if !strings.Contains(location, "sso.example.com") {
 		t.Errorf("Expected redirect to SSO, got: %s", location)
 	}
 }
@@ -328,6 +384,8 @@ func TestServeHTTP_ValidCookie(t *testing.T) {
 	config := CreateConfig()
 	config.SecretKey = "TestKey8"
 	config.ServiceID = "test"
+	config.SSOLoginURL = "http://sso.example.com/login"
+	config.TicketServiceURL = "http://sso.example.com/ticket"
 
 	ctx := context.Background()
 
@@ -382,6 +440,7 @@ func TestServeHTTP_InvalidCookie(t *testing.T) {
 	config.SecretKey = "TestKey8"
 	config.ServiceID = "test"
 	config.SSOLoginURL = "http://sso.example.com/login"
+	config.TicketServiceURL = "http://sso.example.com/ticket"
 
 	ctx := context.Background()
 	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -413,6 +472,8 @@ func TestHandleCookieAuth(t *testing.T) {
 	config := CreateConfig()
 	config.SecretKey = "TestKey8"
 	config.ServiceID = "test"
+	config.SSOLoginURL = "http://sso.example.com/login"
+	config.TicketServiceURL = "http://sso.example.com/ticket"
 
 	ctx := context.Background()
 	nextCalled := false
@@ -457,6 +518,8 @@ func TestHandleCookieAuth_NoCookie(t *testing.T) {
 	config := CreateConfig()
 	config.SecretKey = "TestKey8"
 	config.ServiceID = "test"
+	config.SSOLoginURL = "http://sso.example.com/login"
+	config.TicketServiceURL = "http://sso.example.com/ticket"
 
 	ctx := context.Background()
 	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
@@ -736,16 +799,4 @@ func TestRemovePadding(t *testing.T) {
 	}
 }
 
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
-}
 
-func containsMiddle(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

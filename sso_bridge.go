@@ -9,6 +9,7 @@ import (
 	"crypto/des"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -30,6 +31,7 @@ type Config struct {
 	ServiceID        string   `json:"serviceId,omitempty"`
 	CookieDomain     string   `json:"cookieDomain,omitempty"`
 	CookieSecure     bool     `json:"cookieSecure,omitempty"`
+	CookieMaxAge     int      `json:"cookieMaxAge,omitempty"`
 	AuthHeaders      []string `json:"authHeaders,omitempty"`
 	SOAPAction       string   `json:"soapAction,omitempty"`
 	SOAPNamespace    string   `json:"soapNamespace,omitempty"`
@@ -41,6 +43,7 @@ func CreateConfig() *Config {
 		CookieName:    "SSO_AUTH_TICKET",
 		CstTokenName:  "cst",
 		CookieSecure:  false,
+		CookieMaxAge:  28800,
 		AuthHeaders:   []string{"X-Auth-User", "X-Auth-ID"},
 		SOAPAction:    "http://sso.indigox.net/ValidateServiceTicket",
 		SOAPNamespace: "http://sso.indigox.net/",
@@ -70,6 +73,19 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("serviceId is required")
 	}
 
+	// Validate cookieSecret length early, before URL checks
+	if config.CookieSecret != "" && len(config.CookieSecret) != 32 {
+		return nil, fmt.Errorf("cookieSecret must be exactly 32 characters if provided")
+	}
+
+	if config.SSOLoginURL == "" {
+		return nil, fmt.Errorf("ssoLoginUrl is required")
+	}
+
+	if config.TicketServiceURL == "" {
+		return nil, fmt.Errorf("ticketServiceUrl is required")
+	}
+
 	// Set default CST token parameter name if not provided
 	if config.CstTokenName == "" {
 		config.CstTokenName = "cst"
@@ -85,9 +101,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 	var aesKey []byte
 	if config.CookieSecret != "" {
-		if len(config.CookieSecret) != 32 {
-			return nil, fmt.Errorf("cookieSecret must be exactly 32 characters if provided")
-		}
 		aesKey = []byte(config.CookieSecret)
 	} else {
 		keyHash := sha256.Sum256([]byte(config.SecretKey))
@@ -178,7 +191,10 @@ func (s *SSOBridge) handleCstTokenAuth(rw http.ResponseWriter, req *http.Request
 		return false
 	}
 
-	// Fallback: Use CST data if SOAP doesn't return user info
+	// Fallback to CST data safely ONLY since SOAP validation actually succeeded (err == nil)
+	// Some legacy SSO implementations return Result=true but an empty UserName.
+	// Since the ticket itself was validated by the SOAP endpoint, it is safe to trust
+	// the UserName from the (already decrypted and structurally sound) CST token.
 	if userData["UserName"] == "" {
 		userData = cstData
 	}
@@ -240,6 +256,10 @@ func (s *SSOBridge) buildCookie(token string) *http.Cookie {
 		HttpOnly: true,
 		Secure:   s.config.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
+	}
+
+	if s.config.CookieMaxAge > 0 {
+		cookie.MaxAge = s.config.CookieMaxAge
 	}
 
 	if s.config.CookieDomain != "" {
@@ -381,7 +401,9 @@ func (s *SSOBridge) validateTicketViaSOAP(ctx context.Context, ticket string) (m
 	}
 
 	var res ValidateResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&res); err != nil {
+	// Limit response body to 1 MB to prevent memory exhaustion from malicious servers
+	limitedBody := io.LimitReader(resp.Body, 1<<20)
+	if err := xml.NewDecoder(limitedBody).Decode(&res); err != nil {
 		return nil, fmt.Errorf("xml decode error: %w", err)
 	}
 
@@ -489,15 +511,15 @@ func (s *SSOBridge) removePadding(data []byte) ([]byte, error) {
 	}
 
 	padding := int(data[length-1])
-	if padding > length || padding > des.BlockSize {
+	// padding == 0 is invalid PKCS7; also guard against out-of-range values
+	if padding == 0 || padding > length || padding > des.BlockSize {
 		return nil, fmt.Errorf("invalid padding")
 	}
 
-	// Verify all padding bytes are correct
-	for i := length - padding; i < length; i++ {
-		if int(data[i]) != padding {
-			return nil, fmt.Errorf("invalid padding byte")
-		}
+	// Use constant-time comparison to prevent timing oracle attacks
+	paddingBytes := bytes.Repeat([]byte{byte(padding)}, padding)
+	if subtle.ConstantTimeCompare(data[length-padding:], paddingBytes) != 1 {
+		return nil, fmt.Errorf("invalid padding byte")
 	}
 
 	return data[:length-padding], nil
